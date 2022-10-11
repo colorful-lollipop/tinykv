@@ -19,7 +19,6 @@ import (
 	"math/rand"
 	"sort"
 
-	"github.com/pingcap-incubator/tinykv/com"
 	"github.com/pingcap-incubator/tinykv/global"
 	"github.com/pingcap-incubator/tinykv/log"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
