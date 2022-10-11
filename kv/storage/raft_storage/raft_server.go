@@ -24,6 +24,7 @@ import (
 
 // RaftStorage is an implementation of `Storage` (see tikv/server.go) backed by a Raft node. It is part of a Raft network.
 // By using Raft, reads and writes are consistent with other nodes in the TinyKV instance.
+// maybe `Storage` in kv/storage/storage.go
 type RaftStorage struct {
 	engines *engine_util.Engines
 	config  *config.Config

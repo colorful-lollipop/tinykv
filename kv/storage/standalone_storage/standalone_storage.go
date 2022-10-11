@@ -8,25 +8,6 @@ import (
 	"github.com/pingcap-incubator/tinykv/proto/pkg/kvrpcpb"
 )
 
-//s_StorageReader is an implementation of StorageReader with standalone_storage
-type s_StorageReader struct {
-	txn *badger.Txn
-}
-
-func (r *s_StorageReader) GetCF(cf string, key []byte) ([]byte, error) {
-	val, err := engine_util.GetCFFromTxn(r.txn, cf, key)
-	if err != nil && err.Error() == "Key not found" {
-		return nil, nil
-	}
-	return val, err
-}
-func (r *s_StorageReader) IterCF(cf string) engine_util.DBIterator {
-	return engine_util.NewCFIterator(cf, r.txn)
-}
-func (r *s_StorageReader) Close() {
-	r.txn.Discard()
-}
-
 // StandAloneStorage is an implementation of `Storage` for a single-node TinyKV instance. It does not
 // communicate with other nodes and all data is stored locally.
 type StandAloneStorage struct {
@@ -54,7 +35,7 @@ func (s *StandAloneStorage) Stop() error {
 func (s *StandAloneStorage) Reader(ctx *kvrpcpb.Context) (storage.StorageReader, error) {
 	// Your Code Here (1).
 	txn := s.db.NewTransaction(false)
-	return &s_StorageReader{txn}, nil
+	return &standAloneStorageReader{txn}, nil
 }
 
 func (s *StandAloneStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify) error {
@@ -63,12 +44,14 @@ func (s *StandAloneStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify) 
 		for _, modify := range batch {
 			switch modify.Data.(type) {
 			case storage.Put:
-				err := txn.Set(engine_util.KeyWithCF(modify.Cf(), modify.Key()), modify.Value())
+				put := modify.Data.(storage.Put)
+				err := txn.Set(engine_util.KeyWithCF(put.Cf, put.Key), put.Value)
 				if err != nil {
 					return err
 				}
 			case storage.Delete:
-				err := txn.Delete(engine_util.KeyWithCF(modify.Cf(), modify.Key()))
+				del := modify.Data.(storage.Delete)
+				err := txn.Delete(engine_util.KeyWithCF(del.Cf, del.Key))
 				if err != nil {
 					return err
 				}
@@ -76,4 +59,23 @@ func (s *StandAloneStorage) Write(ctx *kvrpcpb.Context, batch []storage.Modify) 
 		}
 		return nil
 	})
+}
+
+// standAloneStorageReader is an implementation of StorageReader with standalone_storage
+type standAloneStorageReader struct {
+	txn *badger.Txn
+}
+
+func (r *standAloneStorageReader) GetCF(cf string, key []byte) ([]byte, error) {
+	val, err := engine_util.GetCFFromTxn(r.txn, cf, key)
+	if err == badger.ErrKeyNotFound {
+		return nil, nil
+	}
+	return val, err
+}
+func (r *standAloneStorageReader) IterCF(cf string) engine_util.DBIterator {
+	return engine_util.NewCFIterator(cf, r.txn)
+}
+func (r *standAloneStorageReader) Close() {
+	r.txn.Discard()
 }

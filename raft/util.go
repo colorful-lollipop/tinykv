@@ -17,7 +17,6 @@ package raft
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"sort"
@@ -26,18 +25,33 @@ import (
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
-func min(a, b uint64) uint64 {
+type ordered interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
+		~uintptr |
+		~float32 | ~float64 |
+		~string
+}
+
+func min[T ordered](a, b T) T {
 	if a > b {
 		return b
 	}
 	return a
 }
 
-func max(a, b uint64) uint64 {
+func max[T ordered](a, b T) T {
 	if a > b {
 		return a
 	}
 	return b
+}
+
+// clear a map
+func ClearMap[K comparable, V any](m map[K]V) {
+	for k := range m {
+		delete(m, k)
+	}
 }
 
 // IsEmptyHardState returns true if the given HardState is empty.
@@ -89,7 +103,7 @@ func diffu(a, b string) string {
 }
 
 func mustTemp(pre, body string) string {
-	f, err := ioutil.TempFile("", pre)
+	f, err := os.CreateTemp("", pre)
 	if err != nil {
 		panic(err)
 	}

@@ -70,12 +70,28 @@ type Ready struct {
 type RawNode struct {
 	Raft *Raft
 	// Your Data Here (2A).
+	prevSoftState *SoftState
+	prevHardState pb.HardState
 }
 
 // NewRawNode returns a new RawNode given configuration and a list of raft peers.
 func NewRawNode(config *Config) (*RawNode, error) {
 	// Your Code Here (2A).
-	return nil, nil
+	var err error
+	raft := newRaft(config)
+	defer func() {
+		if msg := recover(); msg != nil {
+			switch x := msg.(type) {
+			case string:
+				err = errors.New(x)
+			case error:
+				err = x
+			default:
+				err = errors.New("Unknow panic")
+			}
+		}
+	}()
+	return &RawNode{raft, nil, pb.HardState{}}, err
 }
 
 // Tick advances the internal logical clock by a single tick.
@@ -143,12 +159,34 @@ func (rn *RawNode) Step(m pb.Message) error {
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
 	// Your Code Here (2A).
-	return Ready{}
+	ready := Ready{}
+	if rn.Raft.Lead != rn.prevSoftState.Lead || rn.Raft.State != rn.prevSoftState.RaftState {
+		ready.SoftState = &SoftState{rn.Raft.Lead, rn.Raft.State}
+		rn.prevSoftState = ready.SoftState
+	}
+	if rn.prevHardState.Commit != rn.Raft.RaftLog.committed ||
+		rn.prevHardState.Term != rn.Raft.Term || rn.prevHardState.Vote != rn.Raft.Vote {
+		ready.HardState.Commit = rn.Raft.RaftLog.committed
+		ready.HardState.Term = rn.prevHardState.Term
+		ready.HardState.Vote = rn.Raft.Vote
+	}
+	ready.Entries = rn.Raft.RaftLog.unstableEntries()
+	ready.CommittedEntries = rn.Raft.RaftLog.nextEnts()
+	ready.Messages = rn.Raft.msgs
+	rn.Raft.msgs = nil
+	return ready
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
+	if rn.Raft.Lead != rn.prevSoftState.Lead || rn.Raft.State != rn.prevSoftState.RaftState ||
+		rn.prevHardState.Commit != rn.Raft.RaftLog.committed ||
+		rn.prevHardState.Term != rn.Raft.Term || rn.prevHardState.Vote != rn.Raft.Vote ||
+		len(rn.Raft.RaftLog.unstableEntries()) > 0 ||
+		len(rn.Raft.msgs) > 0 || len(rn.Raft.RaftLog.nextEnts()) > 0 {
+		return true
+	}
 	return false
 }
 
@@ -156,6 +194,13 @@ func (rn *RawNode) HasReady() bool {
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
 	// Your Code Here (2A).
+	rn.prevHardState = rd.HardState
+	if len(rd.Entries) > 0 {
+		rn.Raft.RaftLog.stabled = rd.Entries[len(rd.Entries)-1].Index
+	}
+	if len(rd.CommittedEntries) > 0 {
+		rn.Raft.RaftLog.applied = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
+	}
 }
 
 // GetProgress return the Progress of this node and its peers, if this

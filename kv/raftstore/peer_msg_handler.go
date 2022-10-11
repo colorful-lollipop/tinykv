@@ -6,10 +6,13 @@ import (
 
 	"github.com/Connor1996/badger/y"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/message"
+	"github.com/pingcap-incubator/tinykv/kv/raftstore/meta"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/runner"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/snap"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/util"
+	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"github.com/pingcap-incubator/tinykv/log"
+	"github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
 	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
@@ -43,6 +46,46 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		return
 	}
 	// Your Code Here (2B).
+	//TODO:copy
+	if !d.RaftGroup.HasReady() {
+		return
+	}
+	ready := d.RaftGroup.Ready()
+	d.peerStorage.SaveReadyState(&ready)
+	if len(ready.Messages) != 0 {
+		d.Send(d.ctx.trans, ready.Messages)
+		//println("ready.Messages[0].Index:", ready.Messages[0].Index)
+	}
+	if len(ready.CommittedEntries) > 0 {
+		for _, entry := range ready.CommittedEntries {
+			// println(d.PeerId(), "d.regionId:", d.regionId, "entry.Index:", entry.Index, "entry.Index:", entry.Term)
+			kvWB := new(engine_util.WriteBatch)
+			if entry.EntryType == eraftpb.EntryType_EntryConfChange {
+				// d.processConfChange(&entry, kvWB)
+			} else {
+				// d.process(&entry, kvWB)
+			}
+			d.peerStorage.applyState.AppliedIndex = entry.Index
+			err := kvWB.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState)
+			if err != nil {
+				panic(err)
+			}
+			if d.stopped {
+				WB := new(engine_util.WriteBatch)
+				WB.DeleteMeta(meta.ApplyStateKey(d.regionId))
+				err = WB.WriteToDB(d.peerStorage.Engines.Kv)
+				if err != nil {
+					panic(err)
+				}
+				return
+			}
+			err = kvWB.WriteToDB(d.peerStorage.Engines.Kv)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+	d.RaftGroup.Advance(ready)
 }
 
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
@@ -114,6 +157,36 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
+	//TODO:copy
+	for len(msg.Requests) > 0 {
+		req := msg.Requests[0]
+		var key []byte
+		switch req.CmdType {
+		case raft_cmdpb.CmdType_Get:
+			key = req.Get.Key
+		case raft_cmdpb.CmdType_Put:
+			key = req.Put.Key
+		case raft_cmdpb.CmdType_Delete:
+			key = req.Delete.Key
+		case raft_cmdpb.CmdType_Snap:
+		}
+		err = util.CheckKeyInRegion(key, d.Region())
+		if err != nil && req.CmdType != raft_cmdpb.CmdType_Snap {
+			cb.Done(ErrResp(err))
+			msg.Requests = msg.Requests[1:]
+			continue
+		}
+		data, err1 := msg.Marshal()
+		if err1 != nil && data != nil {
+			panic(err)
+		}
+		p := &proposal{index: d.nextProposalIndex(), term: d.Term(), cb: cb}
+
+		// println("Propose No.", d.nextProposalIndex(), "proposal")
+		d.proposals = append(d.proposals, p)
+		_ = d.RaftGroup.Propose(data)
+		msg.Requests = msg.Requests[1:]
+	}
 }
 
 func (d *peerMsgHandler) onTick() {
@@ -223,9 +296,9 @@ func (d *peerMsgHandler) validateRaftMessage(msg *rspb.RaftMessage) bool {
 	return true
 }
 
-/// Checks if the message is sent to the correct peer.
-///
-/// Returns true means that the message can be dropped silently.
+// / Checks if the message is sent to the correct peer.
+// /
+// / Returns true means that the message can be dropped silently.
 func (d *peerMsgHandler) checkMessage(msg *rspb.RaftMessage) bool {
 	fromEpoch := msg.GetRegionEpoch()
 	isVoteMsg := util.IsVoteMessage(msg.Message)

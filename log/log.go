@@ -268,7 +268,15 @@ func LogTypeToString(t LogType) (string, string) {
 }
 
 func New() *Logger {
-	return NewLogger(os.Stderr, "")
+	//Original
+	// return NewLogger(os.Stderr, "")
+
+	//redirect
+	logFile, err := os.OpenFile("/home/zhu/code/go/tinykv/tmp/a.log", os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		panic(err)
+	}
+	return &Logger{_log: log.New(logFile, "", LstdFlags), level: LOG_LEVEL_ALL, highlighting: false}
 }
 
 func NewLogger(w io.Writer, prefix string) *Logger {
@@ -277,6 +285,7 @@ func NewLogger(w io.Writer, prefix string) *Logger {
 		level = StringToLogLevel(os.Getenv("LOG_LEVEL"))
 	} else {
 		level = LOG_LEVEL_INFO
+		// level = LOG_LEVEL_ALL
 	}
 	return &Logger{_log: log.New(w, prefix, LstdFlags), level: level, highlighting: true}
 }
